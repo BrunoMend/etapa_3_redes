@@ -8,85 +8,91 @@ FLAG_DF = 1 << 14
 FLAGS = 0xE000
 FRAGMENTOFSET = 0x1FFF
 
-
 # Coloque aqui o endereço de destino para onde você quer mandar o ping
 dest_addr = '186.219.82.1'
 
-#Array vazio de conexões
+# Array vazio de conexões
 conexoes = {}
 
+
 class Conexao:
-	def __init__(self, id_conexao, total_length):
-		#Informacoes para a conexao
-		self.id_conexao = id_conexao
+    def __init__(self, id_conexao, total_length):
+        # Informacoes para a conexao
+        self.id_conexao = id_conexao
 
-		# datagram vazio do tamanho total para ser montado
-		self.datagram = bytearray(total_length)
-        #controle de fragment_offset
-        self.fragment_offset_recv = {}
+        # datagram vazio do tamanho total para ser montado
+        self.datagram = bytearray(total_length)
 
-        #salva o tamanho total do datagram
-        self.total_length = total_length
+        # controle de fragment_offset
+        self.fragment_offset_recv = []
 
-        #tamanho de datagrams já recebido
+        # salva o tamanho total do datagram
+        self.total_length = int.from_bytes(total_length, 'big')
+
+        # tamanho de datagrams já recebido
         self.recv_datagram_length = 0
 
-    #recebe o segmento com o fragment_offset para incluir no datagram
+    # recebe o segmento com o fragment_offset para incluir no datagram
     def make_datagram(self, segment, fragment_offset):
-        if fragment_offset in fragment_offset_recv:
+        if fragment_offset in self.fragment_offset_recv:
             return
         else:
             self.fragment_offset_recv.append(fragment_offset)
 
-        self.datagram[fragment_offset] = segment
-        self.recv_datagram_length += segment.length
-        if(self.total_length == self.recv_datagram_length):
+        self.datagram[fragment_offset:] = segment
+        self.recv_datagram_length += len(segment)
+        if (self.total_length == self.recv_datagram_length):
             print(self.datagram)
+            print("FOI")
 
 
-#Converte endereco para string
+
+# Converte endereco para string
 def addr2str(addr):
-	return '%d.%d.%d.%d' % tuple(int(x) for x in addr)
+    return '%d.%d.%d.%d' % tuple(int(x) for x in addr)
 
-#Converte string para endereco
+
+# Converte string para endereco
 def str2addr(addr):
-	return bytes(int(x) for x in addr.split('.'))
+    return bytes(int(x) for x in addr.split('.'))
 
-#Cabecalho da camada de rede - IP Datagram Format
+
+# Cabecalho da camada de rede - IP Datagram Format
 def handle_ipv4_header(packet):
-	#Versao do procotolo IP
-	version = packet[0] >> 4
-	#Verifica se a versao do IP eh a 4
-	assert version == 4
-    
-	#Endereco fonte
-	src_addr = addr2str(packet[12:16])
-	#Endereco destino
-	dst_addr = addr2str(packet[16:20])
-	
-    #Tamanho do Cabecalho
-	ihl = packet[0] & 0xf
-	#Segmento contendo o protocolo TCP
-	segment = packet[4*ihl:]
+    # Versao do procotolo IP
+    version = packet[0] >> 4
+    # Verifica se a versao do IP eh a 4
+    assert version == 4
 
-    #Tamanho total do segmento
+    # Endereco fonte
+    src_addr = addr2str(packet[12:16])
+    # Endereco destino
+    dst_addr = addr2str(packet[16:20])
+
+    # Tamanho do Cabecalho
+    ihl = packet[0] & 0xf
+    # Segmento contendo o protocolo TCP
+    segment = packet[4 * ihl:]
+
+    # Tamanho total do segmento
     total_length = packet[2:3]
-    #Posição dos dados no datagram
+    # Posição dos dados no datagram
     fragment_offset = int.from_bytes(packet[6:8], 'big') & FRAGMENTOFSET
-    #Flags da conexão
+    # Flags da conexão
     flags = int.from_bytes(packet[6:8], 'big') & FLAGS
 
-    #identificador da conexão
+    # identificador da conexão
     identification = packet[4:6]
-    #identificador da conexao
-	id_conexao = (src_addr, dst_addr, identification)
+    # identificador da conexao
+    id_conexao = (src_addr, dst_addr, identification)
 
-	return id_conexao, segment, total_length, fragment_offset, flags
+    return id_conexao, segment, total_length, fragment_offset, flags
+
 
 def send_ping(send_fd):
     print('enviando ping')
     # Exemplo de pacote ping (ICMP echo request) com payload grande
-    msg = bytearray(b"\x08\x00\x00\x00" + 5000*b"\xba\xdc\x0f\xfe")
+    msg = bytearray(b"\x08\x00\x00\x00" + 5000 * b"\xba\xdc\x0f\xfe")
     msg[2:4] = struct.pack('!H', calc_checksum(msg))
     send_fd.sendto(msg, (dest_addr, 0))
 
@@ -97,18 +103,20 @@ def raw_recv(recv_fd):
     packet = recv_fd.recv(12000)
     print('recebido pacote de %d bytes' % len(packet))
 
-	#Tratamento do cabecalho da camada de rede
-	id_conexao, segment, total_length, fragment_offset, flags = handle_ipv4_header(packet)
+    # Tratamento do cabecalho da camada de rede
+    id_conexao, segment, total_length, fragment_offset, flags = handle_ipv4_header(packet)
+
 
     if (flags & FLAG_DF) == FLAG_DF:
-        #descarta pacotes não fragmentados
+        # descarta pacotes não fragmentados
         return
-    
 
-    if !(id_conexao in conexoes):
-        conexoes.append(Conexao(id_conexao, total_length))
+    if not(id_conexao in conexoes):
+        conexao = Conexao(id_conexao, total_length)
+        conexoes[id_conexao] = conexao
 
     conexoes[id_conexao].make_datagram(segment, fragment_offset)
+    print(conexoes[id_conexao])
 
 
 def calc_checksum(segment):
@@ -117,7 +125,7 @@ def calc_checksum(segment):
         segment += b'\x00'
     checksum = 0
     for i in range(0, len(segment), 2):
-        x, = struct.unpack('!H', segment[i:i+2])
+        x, = struct.unpack('!H', segment[i:i + 2])
         checksum += x
         while checksum > 0xffff:
             checksum = (checksum & 0xffff) + 1
@@ -147,4 +155,4 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.add_reader(recv_fd, raw_recv, recv_fd)
     asyncio.get_event_loop().call_later(1, send_ping, send_fd)
-    loop.run_forever()
+loop.run_forever()
