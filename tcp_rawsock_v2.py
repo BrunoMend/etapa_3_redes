@@ -1,6 +1,8 @@
 import socket
 import asyncio
 import struct
+import time
+from threading import Thread
 
 ETH_P_IP = 0x0800
 FLAG_MF = 1 << 13
@@ -9,42 +11,63 @@ FLAGS = 0xE000
 FRAGMENTOFSET = 0x1FFF
 
 # Coloque aqui o endereço de destino para onde você quer mandar o ping
-dest_addr = '186.219.82.1'
+dest_addr = '192.168.0.1'
 
 # Array vazio de conexões
 conexoes = {}
 
 
 class Conexao:
-    def __init__(self, id_conexao, total_length):
+    def __init__(self, id_conexao, time):
         # Informacoes para a conexao
         self.id_conexao = id_conexao
 
         # datagram vazio do tamanho total para ser montado
-        self.datagram = bytearray(total_length)
+        self.datagram = bytearray()
 
         # controle de fragment_offset
         self.fragment_offset_recv = []
 
-        # salva o tamanho total do datagram
-        self.total_length = int.from_bytes(total_length, 'big')
-
         # tamanho de datagrams já recebido
         self.recv_datagram_length = 0
 
+        self.packets_total_length = 0
+
+        self.time = time
+
+
     # recebe o segmento com o fragment_offset para incluir no datagram
-    def make_datagram(self, segment, fragment_offset):
+    def make_datagram(self, segment, fragment_offset, total_length, flag_mf):
+
         if fragment_offset in self.fragment_offset_recv:
             return
         else:
             self.fragment_offset_recv.append(fragment_offset)
 
-        self.datagram[fragment_offset:] = segment
+        self.datagram[fragment_offset * 8:] = segment
         self.recv_datagram_length += len(segment)
-        if (self.total_length == self.recv_datagram_length):
-            print(self.datagram)
-            print("FOI")
 
+        #Testa se é o ultimmo pacote
+        if not flag_mf:
+            self.packets_total_length = fragment_offset * 8 + total_length
+
+        if (self.packets_total_length == self.recv_datagram_length):
+            #print("Conexao:", self.id_conexao)
+            #print("Tamanho do datagrama recebido:", self.recv_datagram_length)
+            #print("Datagrama:", self.datagram)
+            #print()
+            conexoes.pop(self.id_conexao)
+
+
+def expirada():
+    for conexao in conexoes:
+        #print(time.time())
+        #print(conexoes[conexao].time)
+        print(time.time() - conexoes[conexao].time)
+        if (time.time() - conexoes[conexao].time) > 1:
+            print("Timeout expirado:", conexoes[conexao])
+            conexoes.pop(conexao)
+            return
 
 
 # Converte endereco para string
@@ -75,7 +98,7 @@ def handle_ipv4_header(packet):
     segment = packet[4 * ihl:]
 
     # Tamanho total do segmento
-    total_length = packet[2:3]
+    total_length = int.from_bytes(packet[2:4], 'big') - 20
     # Posição dos dados no datagram
     fragment_offset = int.from_bytes(packet[6:8], 'big') & FRAGMENTOFSET
     # Flags da conexão
@@ -90,7 +113,7 @@ def handle_ipv4_header(packet):
 
 
 def send_ping(send_fd):
-    print('enviando ping')
+    #print('enviando ping')
     # Exemplo de pacote ping (ICMP echo request) com payload grande
     msg = bytearray(b"\x08\x00\x00\x00" + 5000 * b"\xba\xdc\x0f\xfe")
     msg[2:4] = struct.pack('!H', calc_checksum(msg))
@@ -101,7 +124,7 @@ def send_ping(send_fd):
 
 def raw_recv(recv_fd):
     packet = recv_fd.recv(12000)
-    print('recebido pacote de %d bytes' % len(packet))
+    #print('recebido pacote de %d bytes' % len(packet))
 
     # Tratamento do cabecalho da camada de rede
     id_conexao, segment, total_length, fragment_offset, flags = handle_ipv4_header(packet)
@@ -112,11 +135,10 @@ def raw_recv(recv_fd):
         return
 
     if not(id_conexao in conexoes):
-        conexao = Conexao(id_conexao, total_length)
+        conexao = Conexao(id_conexao, time.time())
         conexoes[id_conexao] = conexao
 
-    conexoes[id_conexao].make_datagram(segment, fragment_offset)
-    print(conexoes[id_conexao])
+    conexoes[id_conexao].make_datagram(segment, fragment_offset, total_length, (flags & FLAG_MF) == FLAG_MF)
 
 
 def calc_checksum(segment):
@@ -155,4 +177,6 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.add_reader(recv_fd, raw_recv, recv_fd)
     asyncio.get_event_loop().call_later(1, send_ping, send_fd)
+    thread = Thread(target=expirada, args=[])
+    thread.start()
 loop.run_forever()
