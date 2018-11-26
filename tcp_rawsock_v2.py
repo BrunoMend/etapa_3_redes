@@ -35,6 +35,8 @@ class Conexao:
 
         self.time = time
 
+        #verifica o timeout após 30 seg
+        asyncio.get_event_loop().call_later(30, timeout, self.id_conexao)
 
     # recebe o segmento com o fragment_offset para incluir no datagram
     def make_datagram(self, segment, fragment_offset, total_length, flag_mf):
@@ -47,28 +49,24 @@ class Conexao:
         self.datagram[fragment_offset * 8:] = segment
         self.recv_datagram_length += len(segment)
 
-        #Testa se é o ultimmo pacote
+        #Testa se é o ultimmo segmento e caso seja calcula o tamanho total do segmento
         if not flag_mf:
             self.packets_total_length = fragment_offset * 8 + total_length
 
         if (self.packets_total_length == self.recv_datagram_length):
-            #print("Conexao:", self.id_conexao)
-            #print("Tamanho do datagrama recebido:", self.recv_datagram_length)
-            #print("Datagrama:", self.datagram)
-            #print()
+            print("Conexao:", self.id_conexao)
+            print("Tamanho do datagrama recebido:", self.recv_datagram_length)
+            print("Datagrama: %s", self.datagram)
+            print()
             conexoes.pop(self.id_conexao)
 
 
-def expirada():
-    for conexao in conexoes:
-        #print(time.time())
-        #print(conexoes[conexao].time)
-        print(time.time() - conexoes[conexao].time)
-        if (time.time() - conexoes[conexao].time) > 1:
-            print("Timeout expirado:", conexoes[conexao])
-            conexoes.pop(conexao)
-            return
-
+# Retira a conexão de lista de conexões caso expire o timeout
+def timeout(id_conexao):
+    print("Timeout expirado:", id_conexao)
+    if id_conexao in conexoes:
+        conexoes.pop(id_conexao)
+    
 
 # Converte endereco para string
 def addr2str(addr):
@@ -177,6 +175,4 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.add_reader(recv_fd, raw_recv, recv_fd)
     asyncio.get_event_loop().call_later(1, send_ping, send_fd)
-    thread = Thread(target=expirada, args=[])
-    thread.start()
 loop.run_forever()
